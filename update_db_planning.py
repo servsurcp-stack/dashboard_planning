@@ -88,7 +88,7 @@ else:
                 passage_id, date, mois, jour, semaine, agent, visite, visitetype, lieu, commentaire
             )
             SELECT 
-                passage_id::integer, date, mois, jour, semaine, agent, visite, visitetype, lieu, NULL AS commentaire
+                passage_id::integer, date, mois, jour, semaine, agent, visite, visitetype, lieu, commentaire
             FROM {temp_table}
             ON CONFLICT (passage_id)
             DO UPDATE SET

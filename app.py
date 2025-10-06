@@ -5,6 +5,13 @@ from sqlalchemy import create_engine, text
 import streamlit as st
 import altair as alt
 from datetime import datetime
+import seaborn as sns
+import matplotlib.pyplot as plt
+from scipy.stats import linregress
+from wordcloud import WordCloud
+import folium
+from streamlit_folium import folium_static
+import numpy as np
 
 # Charger les variables d'environnement
 load_dotenv()
@@ -155,9 +162,6 @@ def main():
 
     st.altair_chart(chart_lieu, use_container_width=True)
 
-    # Option de téléchargement CSV pour agrégats par lieu
-    csv_lieu = agg_lieu.to_csv(index=False).encode("utf-8")
-    st.download_button("Télécharger les agrégats par lieu CSV", data=csv_lieu, file_name="passages_par_lieu.csv", mime="text/csv")
 
     # Deuxième graphique : fréquence par jour de la semaine
     st.markdown("**Fréquence des passages par jour de la semaine**")
@@ -175,6 +179,135 @@ def main():
     )
 
     st.altair_chart(chart_weekday, use_container_width=True)
+
+    # --- Feature 1: Heatmap de Couverture des Lieux par Agent et Période ---
+    st.markdown("### Feature 1: Heatmap de Couverture des Lieux par Agent et Période")
+    pivot = df_filtered.pivot_table(index='agent', columns='jour', values='passage_id', aggfunc='count', fill_value=0)
+    fig, ax = plt.subplots(figsize=(10, 6))
+    sns.heatmap(pivot, annot=True, cmap='YlGnBu', ax=ax)
+    st.pyplot(fig)
+
+    # --- Feature 2: Tendances Temporelles avec Prévisions Simples ---
+    st.markdown("### Feature 2: Tendances Temporelles avec Prévisions Simples")
+    df_trend = df_filtered.set_index('date')['passage_id'].resample('D').count().reset_index()
+    df_trend = df_trend.rename(columns={'passage_id': 'passages'})
+    df_trend['moving_avg'] = df_trend['passages'].rolling(window=7).mean()
+    x = np.arange(len(df_trend))
+    slope, intercept, _, _, _ = linregress(x, df_trend['passages'].fillna(0))
+    df_trend['trend'] = intercept + slope * x
+    chart_trend = alt.Chart(df_trend.melt(id_vars='date')).mark_line().encode(x='date:T', y='value:Q', color='variable:N')
+    st.altair_chart(chart_trend, use_container_width=True)
+
+    # --- Feature 3: Analyse des Commentaires avec Word Cloud ou Sentiment ---
+    st.markdown("### Feature 3: Analyse des Commentaires")
+    if 'commentaire' in df_filtered.columns and not df_filtered['commentaire'].dropna().empty:
+        text = ' '.join(df_filtered['commentaire'].dropna())
+        wordcloud = WordCloud(width=800, height=400, background_color='white').generate(text)
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.imshow(wordcloud, interpolation='bilinear')
+        ax.axis('off')
+        st.pyplot(fig)
+    else:
+        st.info("Aucun commentaire disponible pour l'analyse.")
+
+    # --- Feature 4: Carte Géographique des Lieux Visités ---
+    st.markdown("### Feature 4: Carte Géographique des Lieux Visités")
+    lieu_agg = df_filtered.groupby('lieu').agg(passages=('passage_id', 'count')).reset_index()
+    # Dictionnaire de coords (basé sur LIEU_MAP, ajustez avec des coords réelles)
+    coords_map = {
+        "Rennes": (48.1147, -1.6794),
+        "Nantes": (47.2184, -1.5536),
+        "Orleans": (47.9032, 1.9093),
+        "Bordeaux": (44.8378, -0.5792),
+        "Toulouse": (43.6047, 1.4442),
+        "Montpellier": (43.6119, 3.8767),
+        "Corbas": (45.6667, 4.9000),
+        "Marseille": (43.2965, 5.3698),
+        "Clermont": (45.7772, 3.0870),
+        "Lille": (50.6292, 3.0573),
+        "Nice": (43.7102, 7.2620),
+        "Caen": (49.1829, -0.3707),
+        "Nancy": (48.6921, 6.1844),
+        "Dijon": (47.3220, 5.0415),
+        "Tremblay": (48.9500, 2.5667),
+        "Lisses": (48.6000, 2.4167),
+        "Ferrieres": (48.8167, 2.7167),
+        "Pantin": (48.8932, 2.4096),
+        "Chartres": (48.4439, 1.4892),
+        "Reims": (49.2583, 4.0317),
+        "Niort": (46.3231, -0.4588),
+        "Strasbourg": (48.5734, 7.7521),
+        "Chambery": (45.5646, 5.9178),
+        "Rouen": (49.4432, 1.0999),
+        "Quincieux": (45.9000, 4.7667),
+        "WILLEBROEK": (51.0604, 4.3600),
+        "Artenay": (48.0833, 1.8833),
+        "Moins": (45.7167, 4.9000),  # Assumé près de Lyon, ajustez si nécessaire
+        "Brebieres": (50.3333, 3.0667),
+        "Compans": (48.9833, 2.6667),
+        # Ajoutez d'autres ATxxxx si nécessaire, basé sur villes
+        "VICHY - COLIS PRIVE": (46.1266, 3.4208),
+        "ST ETIENNE - COLIS PRIVE": (45.4397, 4.3872),
+        "ST BRIEUC - COLIS PRIVE": (48.5142, -2.7652),
+        "BREST - COLIS PRIVE": (48.3904, -4.4861),
+        "VANNES - COLIS PRIVE": (47.6582, -2.7605),
+        "LORIENT - COLIS PRIVE": (47.7483, -3.3658),
+        "BOURGES - COLIS PRIVE": (47.0810, 2.3986),
+        "CHATEAUROUX - COLIS PRIVE": (46.8096, 1.6904),
+        "POITIERS - COLIS PRIVE": (46.5802, 0.3404),
+        "FREJUS - COLIS PRIVE": (43.4332, 6.7370),
+        "RODEZ-COLIS PRIVE": (44.3526, 2.5774),
+        "BRIVE-COLIS PRIVE": (45.1596, 1.5331),
+        "VALENCE -COLIS PRIVE": (44.9334, 4.8924),
+        "ROANNE-COLIS PRIVE": (46.0360, 4.0683),
+        "CAHORS-COLIS PRIVE": (44.4491, 1.4366),
+        "METZ-COLIS PRIVE": (49.1193, 6.1757),
+        "COMPIEGNE-COLIS PRIVE": (49.4179, 2.8261),
+        "BEAUVAIS-COLIS PRIVE": (49.4291, 2.0807),
+        "ALENCON-COLIS PRIVE": (48.4329, 0.0919),
+        "COLMAR-COLIS PRIVE": (48.0794, 7.3585),
+        "ANNECY-COLIS PRIVE": (45.8992, 6.1296),
+        "MAUREPAS.-COLIS PRIVE": (48.7667, 1.9167),
+        "AMIENS-COLIS PRIVE": (49.8941, 2.2957),
+        "TOULON-COLIS PRIVE": (43.1242, 5.9280),
+        "AVIGNON-COLIS PRIVE": (43.9493, 4.8055),
+        "AUXERRE-COLIS PRIVE": (47.7986, 3.5733)
+    }
+    m = folium.Map(location=[46.6034, 1.8883], zoom_start=5)  # Centre France
+    for _, row in lieu_agg.iterrows():
+        lieu_name = row['lieu'].split(' - ')[-1] if ' - ' in row['lieu'] else row['lieu']
+        if lieu_name in coords_map:
+            folium.CircleMarker(
+                location=coords_map[lieu_name],
+                radius=row['passages'] / 10,
+                popup=f"{row['lieu']}: {row['passages']} passages",
+                color='blue', fill=True
+            ).add_to(m)
+    folium_static(m)
+
+    # --- Feature 5: KPI et Alertes Personnalisables ---
+    st.markdown("### Feature 5: KPI et Alertes Personnalisables")
+    total_passages = len(df_filtered)
+    avg_per_agent = df_filtered.groupby('agent')['passage_id'].count().mean()
+    # Calcul du total des lieux pour les visitetype sélectionnés
+    if selected_visitetype:
+        df_total_by_type = df[df["visitetype"].isin(selected_visitetype)]
+    else:
+        df_total_by_type = df
+    total_lieux = df_total_by_type['lieu'].nunique()
+    visited_lieux = df_filtered['lieu'].unique()
+    missing_lieux = [lieu for lieu in df_total_by_type['lieu'].unique() if lieu not in visited_lieux]
+    coverage_pct = (len(visited_lieux) / total_lieux) * 100 if total_lieux > 0 else 0
+    st.metric("Total Passages", total_passages)
+    st.metric("Moyenne par Agent", f"{avg_per_agent:.2f}")
+    st.metric("Couverture des Lieux (%)", f"{coverage_pct:.1f}%")
+    if coverage_pct < 90:
+        st.warning("Alerte : Couverture des lieux inférieure à 90% !")
+        st.markdown("**Lieux non visités :**")
+        missing_df = pd.DataFrame({"lieu_manquant": missing_lieux})
+        st.dataframe(missing_df)
+        csv_missing = missing_df.to_csv(index=False).encode("utf-8")
+        st.download_button("Télécharger la liste des lieux non visités CSV", data=csv_missing, file_name="lieux_non_visites.csv", mime="text/csv")
 
 if __name__ == "__main__":
     main()
