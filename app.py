@@ -26,9 +26,8 @@ DATABASE_URL = f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_POR
 
 @st.cache_data(ttl=300)
 def load_data(query="SELECT * FROM db_planning;"):
-    engine = create_engine(DATABASE_URL)
-    with engine.connect() as conn:
-        df = pd.read_sql(text(query), conn)
+    conn = st.connection("postgresql", type="sql")
+    df = conn.query(query, ttl="10m")
     # Normalisations utiles
     if "date" in df.columns:
         df["date"] = pd.to_datetime(df["date"], errors="coerce")
