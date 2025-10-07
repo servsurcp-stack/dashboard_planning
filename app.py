@@ -1,8 +1,5 @@
-import os
-from dotenv import load_dotenv
-import pandas as pd
-from sqlalchemy import create_engine, text
 import streamlit as st
+import pandas as pd
 import altair as alt
 from datetime import datetime
 import seaborn as sns
@@ -12,17 +9,6 @@ from wordcloud import WordCloud
 import folium
 from streamlit_folium import folium_static
 import numpy as np
-
-# Charger les variables d'environnement
-load_dotenv()
-
-DB_USER = os.getenv("DB_USER")
-DB_PASSWORD = os.getenv("DB_PASSWORD")
-DB_HOST = os.getenv("DB_HOST", "localhost")
-DB_PORT = os.getenv("DB_PORT", "5432")
-DB_NAME = os.getenv("DB_NAME")
-
-DATABASE_URL = f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 
 @st.cache_data(ttl=300)
 def load_data(query="SELECT * FROM db_planning;"):
@@ -52,9 +38,7 @@ def compute_passages_by_lieu(df):
     return agg
 
 def compute_passages_by_weekday(df):
-    # Créer une colonne pour le jour de la semaine en anglais
     df["weekday"] = df["date"].dt.day_name()
-    # Mappage des jours en français
     weekday_map = {
         "Monday": "Lundi",
         "Tuesday": "Mardi",
@@ -65,7 +49,6 @@ def compute_passages_by_weekday(df):
         "Sunday": "Dimanche"
     }
     df["weekday"] = df["weekday"].map(weekday_map)
-    # Définir l'ordre des jours
     days_order = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
     agg_weekday = (
         df.groupby("weekday", dropna=False)
@@ -79,7 +62,6 @@ def compute_passages_by_weekday(df):
 def main():
     st.title("Dashboard Passages par Visite")
 
-    # Chargement des données
     st.sidebar.header("Filtrer les données")
     df = load_data()
 
@@ -87,7 +69,6 @@ def main():
         st.warning("Aucune donnée récupérée. Vérifie le nom de la table et la connexion.")
         return
 
-    # Préfiltre : dates de début et de fin séparées
     st.sidebar.subheader("Plage de dates")
     min_date = df["date"].min().to_pydatetime().date() if not df["date"].isna().all() else datetime(2025, 1, 1).date()
     max_date = df["date"].max().to_pydatetime().date() if not df["date"].isna().all() else datetime(2025, 12, 31).date()
@@ -108,18 +89,15 @@ def main():
         format="YYYY-MM-DD"
     )
 
-    # Vérifier que la date de fin est postérieure ou égale à la date de début
     if end_date < start_date:
         st.sidebar.error("La date de fin doit être postérieure ou égale à la date de début.")
         return
 
-    # Filtrer les données par plage de dates
     df_filtered = df[
         (df["date"] >= pd.Timestamp(start_date)) &
         (df["date"] <= pd.Timestamp(end_date))
     ]
 
-    # Filtres existants + filtre par lieu
     agents_list = sorted(df_filtered["agent"].dropna().unique().tolist())
     visitetype_list = sorted(df_filtered["visitetype"].dropna().unique().tolist())
     lieu_list = sorted(df_filtered["lieu"].dropna().unique().tolist())
@@ -128,25 +106,21 @@ def main():
     selected_visitetype = st.sidebar.multiselect("Type de visite", options=visitetype_list, default=visitetype_list)
     selected_lieux = st.sidebar.multiselect("Lieu", options=lieu_list, default=lieu_list)
 
-    # Appliquer les filtres supplémentaires
     df_filtered = df_filtered[
         df_filtered["agent"].isin(selected_agents) &
         df_filtered["visitetype"].isin(selected_visitetype) &
         df_filtered["lieu"].isin(selected_lieux)
     ]
 
-    # Vérifier si des données restent après filtrage
     if df_filtered.empty:
         st.warning("Aucune donnée ne correspond aux filtres sélectionnés.")
         return
 
-    # Calculs pour le premier graphique (par lieu)
     agg_lieu = compute_passages_by_lieu(df_filtered)
 
     st.markdown("**Nombre de passages par lieu**")
     st.dataframe(agg_lieu.sort_values("passages", ascending=False).reset_index(drop=True).head(200))
 
-    # Graphique interactif Altair pour passages par lieu
     chart_lieu = (
         alt.Chart(agg_lieu)
         .mark_bar()
@@ -161,8 +135,9 @@ def main():
 
     st.altair_chart(chart_lieu, use_container_width=True)
 
+    csv_lieu = agg_lieu.to_csv(index=False).encode("utf-8")
+    st.download_button("Télécharger les agrégats par lieu CSV", data=csv_lieu, file_name="passages_par_lieu.csv", mime="text/csv")
 
-    # Deuxième graphique : fréquence par jour de la semaine
     st.markdown("**Fréquence des passages par jour de la semaine**")
     agg_weekday = compute_passages_by_weekday(df_filtered)
 
@@ -179,14 +154,12 @@ def main():
 
     st.altair_chart(chart_weekday, use_container_width=True)
 
-    # --- Feature 1: Heatmap de Couverture des Lieux par Agent et Période ---
     st.markdown("### Feature 1: Heatmap de Couverture des Lieux par Agent et Période")
     pivot = df_filtered.pivot_table(index='agent', columns='jour', values='passage_id', aggfunc='count', fill_value=0)
     fig, ax = plt.subplots(figsize=(10, 6))
     sns.heatmap(pivot, annot=True, cmap='YlGnBu', ax=ax)
     st.pyplot(fig)
 
-    # --- Feature 2: Tendances Temporelles avec Prévisions Simples ---
     st.markdown("### Feature 2: Tendances Temporelles avec Prévisions Simples")
     df_trend = df_filtered.set_index('date')['passage_id'].resample('D').count().reset_index()
     df_trend = df_trend.rename(columns={'passage_id': 'passages'})
@@ -197,8 +170,7 @@ def main():
     chart_trend = alt.Chart(df_trend.melt(id_vars='date')).mark_line().encode(x='date:T', y='value:Q', color='variable:N')
     st.altair_chart(chart_trend, use_container_width=True)
 
-    # --- Feature 3: Analyse des Commentaires avec Word Cloud ou Sentiment ---
-    st.markdown("### Feature 3: Analyse des Commentaires")
+    st.markdown("### Feature 3: Analyse des Commentaires avec Word Cloud")
     if 'commentaire' in df_filtered.columns and not df_filtered['commentaire'].dropna().empty:
         text = ' '.join(df_filtered['commentaire'].dropna())
         wordcloud = WordCloud(width=800, height=400, background_color='white').generate(text)
@@ -209,10 +181,8 @@ def main():
     else:
         st.info("Aucun commentaire disponible pour l'analyse.")
 
-    # --- Feature 4: Carte Géographique des Lieux Visités ---
     st.markdown("### Feature 4: Carte Géographique des Lieux Visités")
     lieu_agg = df_filtered.groupby('lieu').agg(passages=('passage_id', 'count')).reset_index()
-    # Dictionnaire de coords (basé sur LIEU_MAP, ajustez avec des coords réelles)
     coords_map = {
         "Rennes": (48.1147, -1.6794),
         "Nantes": (47.2184, -1.5536),
@@ -241,10 +211,9 @@ def main():
         "Quincieux": (45.9000, 4.7667),
         "WILLEBROEK": (51.0604, 4.3600),
         "Artenay": (48.0833, 1.8833),
-        "Moins": (45.7167, 4.9000),  # Assumé près de Lyon, ajustez si nécessaire
+        "Moins": (45.7167, 4.9000),
         "Brebieres": (50.3333, 3.0667),
         "Compans": (48.9833, 2.6667),
-        # Ajoutez d'autres ATxxxx si nécessaire, basé sur villes
         "VICHY - COLIS PRIVE": (46.1266, 3.4208),
         "ST ETIENNE - COLIS PRIVE": (45.4397, 4.3872),
         "ST BRIEUC - COLIS PRIVE": (48.5142, -2.7652),
@@ -272,7 +241,7 @@ def main():
         "AVIGNON-COLIS PRIVE": (43.9493, 4.8055),
         "AUXERRE-COLIS PRIVE": (47.7986, 3.5733)
     }
-    m = folium.Map(location=[46.6034, 1.8883], zoom_start=5)  # Centre France
+    m = folium.Map(location=[46.6034, 1.8883], zoom_start=5)
     for _, row in lieu_agg.iterrows():
         lieu_name = row['lieu'].split(' - ')[-1] if ' - ' in row['lieu'] else row['lieu']
         if lieu_name in coords_map:
@@ -284,11 +253,9 @@ def main():
             ).add_to(m)
     folium_static(m)
 
-    # --- Feature 5: KPI et Alertes Personnalisables ---
     st.markdown("### Feature 5: KPI et Alertes Personnalisables")
     total_passages = len(df_filtered)
     avg_per_agent = df_filtered.groupby('agent')['passage_id'].count().mean()
-    # Calcul du total des lieux pour les visitetype sélectionnés
     if selected_visitetype:
         df_total_by_type = df[df["visitetype"].isin(selected_visitetype)]
     else:
