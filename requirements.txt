@@ -84,7 +84,6 @@ prometheus_client==0.23.1
 prompt_toolkit==3.0.52
 protobuf==6.32.1
 psutil==7.1.0
-psycopg2==2.9.10
 pure_eval==0.2.3
 pyarrow==21.0.0
 pycparser==2.23
@@ -136,3 +135,4 @@ websocket-client==1.8.0
 widgetsnbextension==4.0.14
 wordcloud==1.9.4
 xyzservices==2025.4.0
+psycopg2-binary==2.9.10 
