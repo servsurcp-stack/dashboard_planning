@@ -113,7 +113,7 @@ def suggest_visit_days_for_lieux(df, lieux, default_msg="Aucune donnée historiq
 
 
 def main():
-    st.title("Dashboard Passages par Visite")
+    st.title("Dashboard Planning des visites")
 
     st.sidebar.header("Filtrer les données")
     df = load_data()
@@ -194,7 +194,7 @@ def main():
     st.altair_chart(chart_lieu, use_container_width=True)
 
 
-    st.markdown("**Fréquence des passages par jour de la semaine**")
+    st.markdown("### Fréquence des passages par jour de la semaine")
     agg_weekday = compute_passages_by_weekday(df_filtered)
 
     chart_weekday = (
@@ -216,7 +216,7 @@ def main():
     sns.heatmap(pivot, annot=True, cmap='YlGnBu', ax=ax)
     st.pyplot(fig)
 
-    st.markdown("Tendances Temporelles avec Prévisions Simples")
+    st.markdown("###Tendances Temporelles avec Prévisions Simples")
     df_trend = df_filtered.set_index('date')['passage_id'].resample('D').count().reset_index()
     df_trend = df_trend.rename(columns={'passage_id': 'passages'})
     # Supprimer explicitement les dimanches introduits par le resample (agences fermées)
