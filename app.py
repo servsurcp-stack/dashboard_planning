@@ -9,6 +9,7 @@ from wordcloud import WordCloud
 import folium
 from streamlit_folium import folium_static
 import numpy as np
+import io
 
 @st.cache_data(ttl=300)
 def load_data(query="SELECT * FROM db_planning;"):
@@ -49,7 +50,7 @@ def compute_passages_by_weekday(df):
         "Sunday": "Dimanche"
     }
     df["weekday"] = df["weekday"].map(weekday_map)
-    days_order = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
+    days_order = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi"]
     agg_weekday = (
         df.groupby("weekday", dropna=False)
           .agg(passages=("passage_id", "count"))
@@ -59,11 +60,68 @@ def compute_passages_by_weekday(df):
     agg_weekday = agg_weekday.sort_values("weekday")
     return agg_weekday
 
+
+def suggest_visit_days_for_lieux(df, lieux, default_msg="Aucune donnée historique"):
+    """Pour chaque lieu dans `lieux`, calcule les jours de la semaine où les passages sont les moins fréquents
+    (sur l'historique complet du lieu dans `df`) et renvoie une dict {lieu: "Jour1, Jour2"}.
+    Si aucun enregistrement pour le lieu, on retourne `default_msg`.
+    Les jours sont renvoyés en français et triés selon l'ordre de la semaine.
+    """
+    # Préparer mapping des noms de jours
+    weekday_map_en_to_fr = {
+        "Monday": "Lundi",
+        "Tuesday": "Mardi",
+        "Wednesday": "Mercredi",
+        "Thursday": "Jeudi",
+        "Friday": "Vendredi",
+        "Saturday": "Samedi",
+        "Sunday": "Dimanche"
+    }
+    days_order = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi"]
+
+    results = {}
+    for lieu in lieux:
+        df_lieu = df[df["lieu"] == lieu]
+        if df_lieu.empty or "date" not in df_lieu.columns:
+            results[lieu] = default_msg
+            continue
+        # compter les passages par jour de la semaine pour ce lieu
+        counts = (
+            df_lieu.assign(weekday=df_lieu["date"].dt.day_name())
+                  .groupby("weekday", dropna=False)
+                  .agg(passages=("passage_id", "count"))
+                  .reset_index()
+        )
+        # Assurer que tous les jours de la semaine sont présents (même si 0 passages)
+        # Exclure Sunday (agences fermées) — reindexer sur la semaine sans Sunday
+        full_week_en = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+        counts = counts.set_index("weekday").reindex(full_week_en, fill_value=0).reset_index()
+        # mapper en FR
+        counts["weekday_fr"] = counts["weekday"].map(weekday_map_en_to_fr)
+        # Si le mapping donne des NaN (p.ex. pour dates mal formées), on retire ces lignes
+        counts = counts.dropna(subset=["weekday_fr"]).copy()
+        if counts.empty:
+            results[lieu] = default_msg
+            continue
+        # trouver la(s) valeur(s) minimale(s) (inclut désormais les zéros)
+        min_val = counts["passages"].min()
+        least_days = counts[counts["passages"] == min_val]["weekday_fr"].tolist()
+        # trier selon l'ordre de la semaine
+        least_days_sorted = [d for d in days_order if d in least_days]
+        results[lieu] = ", ".join(least_days_sorted) if least_days_sorted else default_msg
+    return results
+
+
 def main():
     st.title("Dashboard Passages par Visite")
 
     st.sidebar.header("Filtrer les données")
     df = load_data()
+
+    # Pré-filtre : supprimer les dimanches (agences fermées)
+    if "date" in df.columns:
+        # day_name() en anglais -> Sunday
+        df = df[~(df["date"].dt.day_name() == "Sunday")].copy()
 
     if df.empty:
         st.warning("Aucune donnée récupérée. Vérifie le nom de la table et la connexion.")
@@ -135,8 +193,6 @@ def main():
 
     st.altair_chart(chart_lieu, use_container_width=True)
 
-    csv_lieu = agg_lieu.to_csv(index=False).encode("utf-8")
-    st.download_button("Télécharger les agrégats par lieu CSV", data=csv_lieu, file_name="passages_par_lieu.csv", mime="text/csv")
 
     st.markdown("**Fréquence des passages par jour de la semaine**")
     agg_weekday = compute_passages_by_weekday(df_filtered)
@@ -154,34 +210,28 @@ def main():
 
     st.altair_chart(chart_weekday, use_container_width=True)
 
-    st.markdown("### Feature 1: Heatmap de Couverture des Lieux par Agent et Période")
+    st.markdown("### Heatmap de Couverture des Lieux par Agent et Période")
     pivot = df_filtered.pivot_table(index='agent', columns='jour', values='passage_id', aggfunc='count', fill_value=0)
     fig, ax = plt.subplots(figsize=(10, 6))
     sns.heatmap(pivot, annot=True, cmap='YlGnBu', ax=ax)
     st.pyplot(fig)
 
-    st.markdown("### Feature 2: Tendances Temporelles avec Prévisions Simples")
+    st.markdown("Tendances Temporelles avec Prévisions Simples")
     df_trend = df_filtered.set_index('date')['passage_id'].resample('D').count().reset_index()
     df_trend = df_trend.rename(columns={'passage_id': 'passages'})
-    df_trend['moving_avg'] = df_trend['passages'].rolling(window=7).mean()
+    # Supprimer explicitement les dimanches introduits par le resample (agences fermées)
+    df_trend['weekday'] = df_trend['date'].dt.day_name()
+    df_trend = df_trend[df_trend['weekday'] != 'Sunday'].reset_index(drop=True)
+
+    # Recalculer moving average et trend sur la série filtrée
+    df_trend['moving_avg_7D'] = df_trend['passages'].rolling(window=7).mean()
     x = np.arange(len(df_trend))
     slope, intercept, _, _, _ = linregress(x, df_trend['passages'].fillna(0))
     df_trend['trend'] = intercept + slope * x
     chart_trend = alt.Chart(df_trend.melt(id_vars='date')).mark_line().encode(x='date:T', y='value:Q', color='variable:N')
     st.altair_chart(chart_trend, use_container_width=True)
 
-    st.markdown("### Feature 3: Analyse des Commentaires avec Word Cloud")
-    if 'commentaire' in df_filtered.columns and not df_filtered['commentaire'].dropna().empty:
-        text = ' '.join(df_filtered['commentaire'].dropna())
-        wordcloud = WordCloud(width=800, height=400, background_color='white').generate(text)
-        fig, ax = plt.subplots(figsize=(10, 5))
-        ax.imshow(wordcloud, interpolation='bilinear')
-        ax.axis('off')
-        st.pyplot(fig)
-    else:
-        st.info("Aucun commentaire disponible pour l'analyse.")
-
-    st.markdown("### Feature 4: Carte Géographique des Lieux Visités")
+    st.markdown("### Carte Géographique des Lieux Visités")
     lieu_agg = df_filtered.groupby('lieu').agg(passages=('passage_id', 'count')).reset_index()
     coords_map = {
         "Rennes": (48.1147, -1.6794),
@@ -191,7 +241,8 @@ def main():
         "Toulouse": (43.6047, 1.4442),
         "Montpellier": (43.6119, 3.8767),
         "Corbas": (45.6667, 4.9000),
-        "Marseille": (43.2965, 5.3698),
+        "Marseille": (43.3916, 5.2333),
+        "SIEGE": (43.2965, 5.3698),
         "Clermont": (45.7772, 3.0870),
         "Lille": (50.6292, 3.0573),
         "Nice": (43.7102, 7.2620),
@@ -247,13 +298,13 @@ def main():
         if lieu_name in coords_map:
             folium.CircleMarker(
                 location=coords_map[lieu_name],
-                radius=row['passages'] / 10,
+                radius=row['passages'] / 5,
                 popup=f"{row['lieu']}: {row['passages']} passages",
                 color='blue', fill=True
             ).add_to(m)
     folium_static(m)
 
-    st.markdown("### Feature 5: KPI et Alertes Personnalisables")
+    st.markdown("### KPI et Alertes")
     total_passages = len(df_filtered)
     avg_per_agent = df_filtered.groupby('agent')['passage_id'].count().mean()
     if selected_visitetype:
@@ -267,13 +318,72 @@ def main():
     st.metric("Total Passages", total_passages)
     st.metric("Moyenne par Agent", f"{avg_per_agent:.2f}")
     st.metric("Couverture des Lieux (%)", f"{coverage_pct:.1f}%")
+    # Option: afficher toujours la liste des lieux manquants
+    show_all_missing = st.checkbox("Afficher toutes les agences manquantes (même si la couverture >= 90%)", value=True)
     if coverage_pct < 90:
         st.warning("Alerte : Couverture des lieux inférieure à 90% !")
+    if coverage_pct < 90 or show_all_missing:
         st.markdown("**Lieux non visités :**")
         missing_df = pd.DataFrame({"lieu_manquant": missing_lieux})
+
+        # Calculer le(s) jour(s) de visite suggéré(s) pour chaque lieu manquant
+        suggestions = suggest_visit_days_for_lieux(df, missing_lieux)
+        missing_df["jour_de_visite_suggere"] = missing_df["lieu_manquant"].map(suggestions)
+
+        # Ajouter colonnes nb_passage_{jour} pour chaque jour de la semaine (historique total par lieu)
+        # On utilisera les noms en français pour les colonnes
+        jours_fr = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi"]
+        # Initialiser les colonnes à 0
+        for jour in jours_fr:
+            col_name = f"nb_passage_{jour.lower()}"
+            missing_df[col_name] = 0
+
+        # Pré-calculer les comptes par lieu et jour (en français)
+        if "date" in df.columns:
+            df_counts = (
+                df.assign(weekday=df["date"].dt.day_name())
+                  .groupby(["lieu", "weekday"], dropna=False)
+                  .agg(passages=("passage_id", "count"))
+                  .reset_index()
+            )
+            # mapper weekday en FR
+            en_to_fr = {
+                "Monday": "Lundi",
+                "Tuesday": "Mardi",
+                "Wednesday": "Mercredi",
+                "Thursday": "Jeudi",
+                "Friday": "Vendredi",
+                "Saturday": "Samedi",
+                "Sunday": "Dimanche"
+            }
+            df_counts["weekday_fr"] = df_counts["weekday"].map(en_to_fr)
+
+            # Pour chaque lieu manquant, remplir les colonnes
+            for idx, row in missing_df.iterrows():
+                lieu = row["lieu_manquant"]
+                subset = df_counts[df_counts["lieu"] == lieu]
+                if subset.empty:
+                    # laisser les zéros ou marquer comme NA si nécessaire
+                    continue
+                for _, r in subset.iterrows():
+                    jour_fr = r["weekday_fr"]
+                    if pd.isna(jour_fr):
+                        continue
+                    col = f"nb_passage_{jour_fr.lower()}"
+                    if col in missing_df.columns:
+                        missing_df.at[idx, col] = int(r["passages"])
+
         st.dataframe(missing_df)
-        csv_missing = missing_df.to_csv(index=False).encode("utf-8")
-        st.download_button("Télécharger la liste des lieux non visités CSV", data=csv_missing, file_name="lieux_non_visites.csv", mime="text/csv")
+
+        # XLSX export
+        try:
+            towrite = io.BytesIO()
+            with pd.ExcelWriter(towrite, engine="openpyxl") as writer:
+                missing_df.to_excel(writer, index=False, sheet_name="lieux_non_visites")
+            towrite.seek(0)
+            st.download_button("Télécharger la liste des lieux non visités XLSX", data=towrite.getvalue(), file_name="lieux_non_visites.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        except Exception as e:
+            st.error(f"Erreur lors de la génération du fichier XLSX : {e}")
 
 if __name__ == "__main__":
     main()
