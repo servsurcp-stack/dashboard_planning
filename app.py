@@ -28,11 +28,13 @@ def load_data(query="SELECT * FROM db_planning;"):
         df["visitetype"] = df["visitetype"].astype(str)
     if "lieu" in df.columns:
         df["lieu"] = df["lieu"].astype(str)
+    if "region" in df.columns:
+        df["region"] = df["region"].astype(str)
     return df
 
 def compute_passages_by_lieu(df):
     agg = (
-        df.groupby(["lieu", "visitetype", "agent"], dropna=False)
+        df.groupby(["lieu", "visitetype", "agent", "region"], dropna=False)
           .agg(passages=("passage_id", "count"))
           .reset_index()
     )
@@ -60,14 +62,12 @@ def compute_passages_by_weekday(df):
     agg_weekday = agg_weekday.sort_values("weekday")
     return agg_weekday
 
-
 def suggest_visit_days_for_lieux(df, lieux, default_msg="Aucune donnée historique"):
     """Pour chaque lieu dans `lieux`, calcule les jours de la semaine où les passages sont les moins fréquents
     (sur l'historique complet du lieu dans `df`) et renvoie une dict {lieu: "Jour1, Jour2"}.
     Si aucun enregistrement pour le lieu, on retourne `default_msg`.
     Les jours sont renvoyés en français et triés selon l'ordre de la semaine.
     """
-    # Préparer mapping des noms de jours
     weekday_map_en_to_fr = {
         "Monday": "Lundi",
         "Tuesday": "Mardi",
@@ -85,32 +85,24 @@ def suggest_visit_days_for_lieux(df, lieux, default_msg="Aucune donnée historiq
         if df_lieu.empty or "date" not in df_lieu.columns:
             results[lieu] = default_msg
             continue
-        # compter les passages par jour de la semaine pour ce lieu
         counts = (
             df_lieu.assign(weekday=df_lieu["date"].dt.day_name())
                   .groupby("weekday", dropna=False)
                   .agg(passages=("passage_id", "count"))
                   .reset_index()
         )
-        # Assurer que tous les jours de la semaine sont présents (même si 0 passages)
-        # Exclure Sunday (agences fermées) — reindexer sur la semaine sans Sunday
         full_week_en = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
         counts = counts.set_index("weekday").reindex(full_week_en, fill_value=0).reset_index()
-        # mapper en FR
         counts["weekday_fr"] = counts["weekday"].map(weekday_map_en_to_fr)
-        # Si le mapping donne des NaN (p.ex. pour dates mal formées), on retire ces lignes
         counts = counts.dropna(subset=["weekday_fr"]).copy()
         if counts.empty:
             results[lieu] = default_msg
             continue
-        # trouver la(s) valeur(s) minimale(s) (inclut désormais les zéros)
         min_val = counts["passages"].min()
         least_days = counts[counts["passages"] == min_val]["weekday_fr"].tolist()
-        # trier selon l'ordre de la semaine
         least_days_sorted = [d for d in days_order if d in least_days]
         results[lieu] = ", ".join(least_days_sorted) if least_days_sorted else default_msg
     return results
-
 
 def main():
     st.title("Dashboard Planning des visites")
@@ -120,7 +112,6 @@ def main():
 
     # Pré-filtre : supprimer les dimanches (agences fermées)
     if "date" in df.columns:
-        # day_name() en anglais -> Sunday
         df = df[~(df["date"].dt.day_name() == "Sunday")].copy()
 
     if df.empty:
@@ -156,18 +147,72 @@ def main():
         (df["date"] <= pd.Timestamp(end_date))
     ]
 
+    # Listes pour les filtres
     agents_list = sorted(df_filtered["agent"].dropna().unique().tolist())
     visitetype_list = sorted(df_filtered["visitetype"].dropna().unique().tolist())
     lieu_list = sorted(df_filtered["lieu"].dropna().unique().tolist())
+    region_list = sorted(df_filtered["region"].dropna().unique().tolist())
 
-    selected_agents = st.sidebar.multiselect("Agent", options=agents_list, default=agents_list)
-    selected_visitetype = st.sidebar.multiselect("Type de visite", options=visitetype_list, default=visitetype_list)
-    selected_lieux = st.sidebar.multiselect("Lieu", options=lieu_list, default=lieu_list)
+    # Initialiser les sélections dans st.session_state pour persistance
+    if "selected_agents" not in st.session_state:
+        st.session_state.selected_agents = agents_list
+    if "selected_visitetype" not in st.session_state:
+        st.session_state.selected_visitetype = visitetype_list
+    if "selected_lieux" not in st.session_state:
+        st.session_state.selected_lieux = lieu_list
+    if "selected_regions" not in st.session_state:
+        st.session_state.selected_regions = region_list
 
+    # Bouton "Réinitialiser les filtres"
+    if st.sidebar.button("Réinitialiser les filtres"):
+        st.session_state.selected_agents = agents_list
+        st.session_state.selected_visitetype = visitetype_list
+        st.session_state.selected_lieux = lieu_list
+        st.session_state.selected_regions = region_list
+        # Mettre à jour les clés des widgets multiselect pour forcer la réinitialisation
+        st.session_state.agents_multiselect = agents_list
+        st.session_state.visitetype_multiselect = visitetype_list
+        st.session_state.lieux_multiselect = lieu_list
+        st.session_state.regions_multiselect = region_list
+
+    # Filtres multiselect
+    selected_agents = st.sidebar.multiselect(
+        "Agent",
+        options=agents_list,
+        default=st.session_state.selected_agents,
+        key="agents_multiselect"
+    )
+    selected_visitetype = st.sidebar.multiselect(
+        "Type de visite",
+        options=visitetype_list,
+        default=st.session_state.selected_visitetype,
+        key="visitetype_multiselect"
+    )
+    selected_lieux = st.sidebar.multiselect(
+        "Lieu",
+        options=lieu_list,
+        default=st.session_state.selected_lieux,
+        key="lieux_multiselect"
+    )
+    selected_regions = st.sidebar.multiselect(
+        "Région",
+        options=region_list,
+        default=st.session_state.selected_regions,
+        key="regions_multiselect"
+    )
+
+    # Mettre à jour session_state avec les sélections actuelles
+    st.session_state.selected_agents = selected_agents
+    st.session_state.selected_visitetype = selected_visitetype
+    st.session_state.selected_lieux = selected_lieux
+    st.session_state.selected_regions = selected_regions
+
+    # Appliquer les filtres
     df_filtered = df_filtered[
         df_filtered["agent"].isin(selected_agents) &
         df_filtered["visitetype"].isin(selected_visitetype) &
-        df_filtered["lieu"].isin(selected_lieux)
+        df_filtered["lieu"].isin(selected_lieux) &
+        df_filtered["region"].isin(selected_regions)
     ]
 
     if df_filtered.empty:
@@ -186,13 +231,12 @@ def main():
             x=alt.X("passages:Q", title="Nombre de passages"),
             y=alt.Y("lieu:N", sort='-x', title="Lieu"),
             color=alt.Color("visitetype:N", title="Type de visite"),
-            tooltip=["lieu", "visitetype", "agent", "passages"]
+            tooltip=["lieu", "visitetype", "agent", "region", "passages"]
         )
         .properties(height=500)
     )
 
     st.altair_chart(chart_lieu, use_container_width=True)
-
 
     st.markdown("### Fréquence des passages par jour de la semaine")
     agg_weekday = compute_passages_by_weekday(df_filtered)
@@ -201,7 +245,7 @@ def main():
         alt.Chart(agg_weekday)
         .mark_bar()
         .encode(
-            x=alt.X("weekday:N", title="Jour de la semaine", sort=["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]),
+            x=alt.X("weekday:N", title="Jour de la semaine", sort=["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi"]),
             y=alt.Y("passages:Q", title="Nombre de passages"),
             tooltip=["weekday", "passages"]
         )
@@ -216,14 +260,11 @@ def main():
     sns.heatmap(pivot, annot=True, cmap='YlGnBu', ax=ax)
     st.pyplot(fig)
 
-    st.markdown("###Tendances Temporelles avec Prévisions Simples")
+    st.markdown("### Tendances Temporelles avec Prévisions Simples")
     df_trend = df_filtered.set_index('date')['passage_id'].resample('D').count().reset_index()
     df_trend = df_trend.rename(columns={'passage_id': 'passages'})
-    # Supprimer explicitement les dimanches introduits par le resample (agences fermées)
     df_trend['weekday'] = df_trend['date'].dt.day_name()
     df_trend = df_trend[df_trend['weekday'] != 'Sunday'].reset_index(drop=True)
-
-    # Recalculer moving average et trend sur la série filtrée
     df_trend['moving_avg_7D'] = df_trend['passages'].rolling(window=7).mean()
     x = np.arange(len(df_trend))
     slope, intercept, _, _, _ = linregress(x, df_trend['passages'].fillna(0))
@@ -318,27 +359,16 @@ def main():
     st.metric("Total Passages", total_passages)
     st.metric("Moyenne par Agent", f"{avg_per_agent:.2f}")
     st.metric("Couverture des Lieux (%)", f"{coverage_pct:.1f}%")
-    # Option: afficher toujours la liste des lieux manquants
     show_all_missing = st.checkbox("Afficher toutes les agences manquantes (même si la couverture >= 90%)", value=True)
-    if coverage_pct < 90:
-        st.warning("Alerte : Couverture des lieux inférieure à 90% !")
     if coverage_pct < 90 or show_all_missing:
         st.markdown("**Lieux non visités :**")
         missing_df = pd.DataFrame({"lieu_manquant": missing_lieux})
-
-        # Calculer le(s) jour(s) de visite suggéré(s) pour chaque lieu manquant
         suggestions = suggest_visit_days_for_lieux(df, missing_lieux)
         missing_df["jour_de_visite_suggere"] = missing_df["lieu_manquant"].map(suggestions)
-
-        # Ajouter colonnes nb_passage_{jour} pour chaque jour de la semaine (historique total par lieu)
-        # On utilisera les noms en français pour les colonnes
         jours_fr = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi"]
-        # Initialiser les colonnes à 0
         for jour in jours_fr:
             col_name = f"nb_passage_{jour.lower()}"
             missing_df[col_name] = 0
-
-        # Pré-calculer les comptes par lieu et jour (en français)
         if "date" in df.columns:
             df_counts = (
                 df.assign(weekday=df["date"].dt.day_name())
@@ -346,7 +376,6 @@ def main():
                   .agg(passages=("passage_id", "count"))
                   .reset_index()
             )
-            # mapper weekday en FR
             en_to_fr = {
                 "Monday": "Lundi",
                 "Tuesday": "Mardi",
@@ -357,13 +386,10 @@ def main():
                 "Sunday": "Dimanche"
             }
             df_counts["weekday_fr"] = df_counts["weekday"].map(en_to_fr)
-
-            # Pour chaque lieu manquant, remplir les colonnes
             for idx, row in missing_df.iterrows():
                 lieu = row["lieu_manquant"]
                 subset = df_counts[df_counts["lieu"] == lieu]
                 if subset.empty:
-                    # laisser les zéros ou marquer comme NA si nécessaire
                     continue
                 for _, r in subset.iterrows():
                     jour_fr = r["weekday_fr"]
@@ -372,10 +398,7 @@ def main():
                     col = f"nb_passage_{jour_fr.lower()}"
                     if col in missing_df.columns:
                         missing_df.at[idx, col] = int(r["passages"])
-
         st.dataframe(missing_df)
-
-        # XLSX export
         try:
             towrite = io.BytesIO()
             with pd.ExcelWriter(towrite, engine="openpyxl") as writer:

@@ -1,11 +1,8 @@
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-import warnings
-import re
-from collections import defaultdict
 import unicodedata
+import re
+import warnings
 
 warnings.filterwarnings("ignore", category=UserWarning, module="openpyxl")
 
@@ -109,14 +106,7 @@ if "Passage" in long.columns:
     if "Compteur" in long.columns:
         long = long.drop(columns=["Compteur"])
 
-# --- 5) Mettre les colonnes dans un ordre pratique
-front = [c for c in ["Passage_ID", "Date", "Mois", "Jour", "Semaine",
-                     "Agent", "Visite", "VisiteType"]
-         if c in long.columns]
-others = [c for c in long.columns if c not in front]
-long = long[front + others]
-
-# --- 1) Dictionnaire Code -> Nom (ville/libellé)
+# --- 5) Dictionnaire Code -> Nom (ville/libellé)
 LIEU_MAP = {
     "CE01": "Rennes", "CE02": "Nantes", "CE03": "Orleans", "CE04": "Bordeaux",
     "CE05": "Toulouse", "CE06": "Montpellier", "CE07": "Corbas", "CE08": "Marseille",
@@ -142,7 +132,7 @@ LIEU_MAP = {
     "AT8401": "AVIGNON-COLIS PRIVE", "AT8901": "AUXERRE-COLIS PRIVE",
 }
 
-# --- 2) Normaliser le code (CE/H -> 2 chiffres, upper, sans espaces)
+# --- 6) Normaliser le code (CE/H -> 2 chiffres, upper, sans espaces)
 def normalize_code(v):
     if pd.isna(v):
         return pd.NA
@@ -154,7 +144,7 @@ def normalize_code(v):
         return f"{pref}{int(num):02d}"
     return s
 
-# --- 3) Construire "Lieu" = "Code - Nom" avec fallback propre
+# --- 7) Construire "Lieu" = "Code - Nom" avec fallback propre
 if "Visite" not in long.columns:
     raise KeyError("La colonne 'Visite' est introuvable dans le DataFrame 'long'.")
 
@@ -169,10 +159,40 @@ long["Lieu"] = np.where(
     long["Visite"].astype(str).str.strip()
 )
 
+# --- 8) Créer la colonne 'Region' à partir de 'Visite'
+REGION_MAP = {
+    "CE07": "EST", "AT2601": "EST", "CE09": "EST", "AT0301": "EST", "AT1901": "EST",
+    "CE14": "EST", "CE24": "EST", "AT6801": "EST", "CE26": "EST", "AT7401": "EST",
+    "CE28": "EST", "AT4201": "EST", "AT4202": "EST",
+    "CE10": "NORD", "AT8001": "NORD", "CE13": "NORD", "AT5701": "NORD",
+    "CE15": "NORD", "AT6001": "NORD", "AT6002": "NORD", "CE17": "NORD",
+    "CE20": "NORD", "CE27": "NORD",
+    "CE01": "OUEST", "AT2201": "OUEST", "AT2901": "OUEST", "CE02": "OUEST",
+    "AT5601": "OUEST", "AT5602": "OUEST", "CE03": "OUEST", "AT1801": "OUEST",
+    "AT3601": "OUEST", "AT8901": "OUEST", "CE12": "OUEST", "AT6101": "OUEST",
+    "CE16": "OUEST", "AT7801": "OUEST", "CE18": "OUEST", "CE19": "OUEST",
+    "CE21": "OUEST", "AT8601": "OUEST",
+    "CE04": "SUD", "CE05": "SUD", "AT1201": "SUD", "AT4601": "SUD",
+    "CE06": "SUD", "CE08": "SUD", "AT8301": "SUD", "AT8401": "SUD",
+    "CE11": "SUD", "AT8302": "SUD",
+    "SIEGE": "Siege", "RTT": "Inconnu", "CP": "Inconnu", "FERIE": "Inconnu",
+    "DSP": "Inconnu", "TTRAVAIL": "Inconnu", "FORMATION": "Inconnu", "H10": "NORD", "H03": "OUEST", "H07": "EST", "H18": "National", "CE40": "BeLux"
+}
+
+long["Region"] = codes_norm.map(REGION_MAP).fillna("Inconnu")
+
+# --- 9) Filtrer pour exclure VisiteType == 'Autre'
 long = long[long["VisiteType"] != "Autre"]
 
-# Convertir les noms des colonnes en minuscules
+# --- 10) Mettre les colonnes dans un ordre pratique
+front = [c for c in ["Passage_ID", "Date", "Mois", "Jour", "Semaine",
+                     "Agent", "Visite", "VisiteType", "Region", "Lieu"]
+         if c in long.columns]
+others = [c for c in long.columns if c not in front]
+long = long[front + others]
+
+# --- 11) Convertir les noms des colonnes en minuscules
 long.columns = [col.lower() for col in long.columns]
 
-# Exporter vers CSV
+# --- 12) Exporter vers CSV
 long.to_csv("planning.csv", index=False)
