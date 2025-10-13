@@ -163,6 +163,12 @@ def main():
     if "selected_regions" not in st.session_state:
         st.session_state.selected_regions = region_list
 
+    # Valider les valeurs par défaut pour éviter les erreurs
+    st.session_state.selected_agents = [x for x in st.session_state.selected_agents if x in agents_list]
+    st.session_state.selected_visitetype = [x for x in st.session_state.selected_visitetype if x in visitetype_list]
+    st.session_state.selected_lieux = [x for x in st.session_state.selected_lieux if x in lieu_list]
+    st.session_state.selected_regions = [x for x in st.session_state.selected_regions if x in region_list]
+
     # Bouton "Réinitialiser les filtres"
     if st.sidebar.button("Réinitialiser les filtres"):
         st.session_state.selected_agents = agents_list
@@ -174,6 +180,7 @@ def main():
         st.session_state.visitetype_multiselect = visitetype_list
         st.session_state.lieux_multiselect = lieu_list
         st.session_state.regions_multiselect = region_list
+        st.sidebar.success("Filtres réinitialisés !")
 
     # Filtres multiselect
     selected_agents = st.sidebar.multiselect(
