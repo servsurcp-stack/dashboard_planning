@@ -263,6 +263,12 @@ def main():
 
     st.markdown("### Heatmap de Couverture des Lieux par Agent et Période")
     pivot = df_filtered.pivot_table(index='agent', columns='jour', values='passage_id', aggfunc='count', fill_value=0)
+    # Réordonner les colonnes de la heatmap pour Lundi->Samedi (chronologique)
+    jours_col = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi"]
+    # garder uniquement les jours présents dans le pivot, dans l'ordre désiré
+    present_days = [d for d in jours_col if d in pivot.columns]
+    if present_days:
+        pivot = pivot.reindex(columns=present_days)
     fig, ax = plt.subplots(figsize=(10, 6))
     sns.heatmap(pivot, annot=True, cmap='YlGnBu', ax=ax)
     st.pyplot(fig)
