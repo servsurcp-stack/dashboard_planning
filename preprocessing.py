@@ -54,6 +54,35 @@ long["Agent"] = extra[0].str.strip()
 # Normaliser les noms d'agent
 long["Agent"] = long["Agent"].apply(normalize_string)
 
+# --- Anonymiser certains agents: ERIC VEAUTE/ERIC VAUTE -> 1, J-C REPIQUET -> 2, Jonathan CANU -> 3
+# Normalisation utilisée pour faire correspondre les clés (supprime accents et ponctuation, met en MAJ)
+def _normalize_key_for_map(s):
+    if pd.isna(s):
+        return s
+    key = unicodedata.normalize('NFKD', str(s)).encode('ASCII', 'ignore').decode('ASCII')
+    # Supprimer la ponctuation (y compris les tirets) pour matcher des variantes comme 'J-C' vs 'J C'
+    key = re.sub(r"[^\w\s]", "", key)
+    key = re.sub(r"\s+", " ", key).strip().upper()
+    return key
+
+ANON_MAP = {
+    "ERIC VEAUTE": "1",
+    "ERIC VAUTE": "1",
+    "J C REPIQUET": "2",
+    "JC REPIQUET": "2",
+    "JONATHAN CANU": "3",
+}
+
+def anonymize_agent_name(s):
+    """Retourne le code anonymisé si le nom correspond, sinon renvoie la valeur d'origine."""
+    if pd.isna(s):
+        return s
+    k = _normalize_key_for_map(s)
+    return ANON_MAP.get(k, s)
+
+# Appliquer l'anonymisation sur la colonne 'Agent'
+long["Agent"] = long["Agent"].apply(anonymize_agent_name)
+
 # 4) Ordonner et trier pour lecture
 front = [c for c in ["Date", "Mois", "Jour", "Semaine"] if c in long.columns]
 others_id = [c for c in id_cols if c not in front]
