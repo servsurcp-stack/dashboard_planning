@@ -33,14 +33,23 @@ def load_data(query="SELECT * FROM db_planning;"):
     return df
 
 def compute_passages_by_lieu(df):
+    # Agrégation des passages pour les lieux visités (visite not NaN)
     agg = (
-        df.groupby(["lieu", "visitetype", "agent", "region"], dropna=False)
-          .agg(passages=("passage_id", "count"))
-          .reset_index()
+        df[df["visite"].notna()]
+        .groupby(["lieu", "visitetype", "agent", "region"], dropna=False)
+        .agg(passages=("passage_id", "count"))
+        .reset_index()
     )
+    # Ajouter tous les lieux du DataFrame, même ceux non visités
+    all_lieux = df[["lieu", "visitetype", "region"]].drop_duplicates()
+    agg = all_lieux.merge(agg, on=["lieu", "visitetype", "region"], how="left")
+    agg["passages"] = agg["passages"].fillna(0).astype(int)
+    agg["agent"] = agg["agent"].fillna("Inconnu")
     return agg
 
 def compute_passages_by_weekday(df):
+    # Exclure les lignes sans date valide (lieux non visités)
+    df = df[df["date"].notna()].copy()
     df["weekday"] = df["date"].dt.day_name()
     weekday_map = {
         "Monday": "Lundi",
@@ -63,11 +72,6 @@ def compute_passages_by_weekday(df):
     return agg_weekday
 
 def suggest_visit_days_for_lieux(df, lieux, default_msg="Aucune donnée historique"):
-    """Pour chaque lieu dans `lieux`, calcule les jours de la semaine où les passages sont les moins fréquents
-    (sur l'historique complet du lieu dans `df`) et renvoie une dict {lieu: "Jour1, Jour2"}.
-    Si aucun enregistrement pour le lieu, on retourne `default_msg`.
-    Les jours sont renvoyés en français et triés selon l'ordre de la semaine.
-    """
     weekday_map_en_to_fr = {
         "Monday": "Lundi",
         "Tuesday": "Mardi",
@@ -81,7 +85,7 @@ def suggest_visit_days_for_lieux(df, lieux, default_msg="Aucune donnée historiq
 
     results = {}
     for lieu in lieux:
-        df_lieu = df[df["lieu"] == lieu]
+        df_lieu = df[(df["lieu"] == lieu) & (df["date"].notna())]
         if df_lieu.empty or "date" not in df_lieu.columns:
             results[lieu] = default_msg
             continue
@@ -110,17 +114,17 @@ def main():
     st.sidebar.header("Filtrer les données")
     df = load_data()
 
-    # Pré-filtre : supprimer les dimanches (agences fermées)
+    # Pré-filtre : supprimer les dimanches pour les visites réelles, conserver les lieux non visités
     if "date" in df.columns:
-        df = df[~(df["date"].dt.day_name() == "Sunday")].copy()
+        df = df[~(df["date"].dt.day_name() == "Sunday") | (df["visite"].isna())].copy()
 
     if df.empty:
         st.warning("Aucune donnée récupérée. Vérifie le nom de la table et la connexion.")
         return
 
     st.sidebar.subheader("Plage de dates")
-    min_date = df["date"].min().to_pydatetime().date() if not df["date"].isna().all() else datetime(2025, 1, 1).date()
-    max_date = df["date"].max().to_pydatetime().date() if not df["date"].isna().all() else datetime(2025, 12, 31).date()
+    min_date = df[df["date"].notna()]["date"].min().to_pydatetime().date() if not df["date"].isna().all() else datetime(2025, 1, 1).date()
+    max_date = df[df["date"].notna()]["date"].max().to_pydatetime().date() if not df["date"].isna().all() else datetime(2025, 12, 31).date()
 
     start_date = st.sidebar.date_input(
         "Date de début",
@@ -142,16 +146,17 @@ def main():
         st.sidebar.error("La date de fin doit être postérieure ou égale à la date de début.")
         return
 
+    # Filtrer par date, mais conserver les lieux non visités (visite is NaN)
     df_filtered = df[
-        (df["date"] >= pd.Timestamp(start_date)) &
-        (df["date"] <= pd.Timestamp(end_date))
+        ((df["date"] >= pd.Timestamp(start_date)) & (df["date"] <= pd.Timestamp(end_date))) |
+        (df["visite"].isna())
     ]
 
-    # Listes pour les filtres
-    agents_list = sorted(df_filtered["agent"].dropna().unique().tolist())
-    visitetype_list = sorted(df_filtered["visitetype"].dropna().unique().tolist())
-    lieu_list = sorted(df_filtered["lieu"].dropna().unique().tolist())
-    region_list = sorted(df_filtered["region"].dropna().unique().tolist())
+    # Listes pour les filtres, basées sur l'ensemble des données (df) pour inclure tous les lieux
+    agents_list = sorted(df["agent"].dropna().unique().tolist())
+    visitetype_list = sorted(df["visitetype"].dropna().unique().tolist())
+    lieu_list = sorted(df["lieu"].dropna().unique().tolist())
+    region_list = sorted(df["region"].dropna().unique().tolist())
 
     # Initialiser les sélections dans st.session_state pour persistance
     if "selected_agents" not in st.session_state:
@@ -175,7 +180,6 @@ def main():
         st.session_state.selected_visitetype = visitetype_list
         st.session_state.selected_lieux = lieu_list
         st.session_state.selected_regions = region_list
-        # Mettre à jour les clés des widgets multiselect pour forcer la réinitialisation
         st.session_state.agents_multiselect = agents_list
         st.session_state.visitetype_multiselect = visitetype_list
         st.session_state.lieux_multiselect = lieu_list
@@ -262,10 +266,8 @@ def main():
     st.altair_chart(chart_weekday, use_container_width=True)
 
     st.markdown("### Heatmap de Couverture des Lieux par Agent et Période")
-    pivot = df_filtered.pivot_table(index='agent', columns='jour', values='passage_id', aggfunc='count', fill_value=0)
-    # Réordonner les colonnes de la heatmap pour Lundi->Samedi (chronologique)
+    pivot = df_filtered[df_filtered["date"].notna()].pivot_table(index='agent', columns='jour', values='passage_id', aggfunc='count', fill_value=0)
     jours_col = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi"]
-    # garder uniquement les jours présents dans le pivot, dans l'ordre désiré
     present_days = [d for d in jours_col if d in pivot.columns]
     if present_days:
         pivot = pivot.reindex(columns=present_days)
@@ -274,7 +276,7 @@ def main():
     st.pyplot(fig)
 
     st.markdown("### Tendances Temporelles avec Prévisions Simples")
-    df_trend = df_filtered.set_index('date')['passage_id'].resample('D').count().reset_index()
+    df_trend = df_filtered[df_filtered["date"].notna()].set_index('date')['passage_id'].resample('D').count().reset_index()
     df_trend = df_trend.rename(columns={'passage_id': 'passages'})
     df_trend['weekday'] = df_trend['date'].dt.day_name()
     df_trend = df_trend[df_trend['weekday'] != 'Sunday'].reset_index(drop=True)
@@ -286,7 +288,7 @@ def main():
     st.altair_chart(chart_trend, use_container_width=True)
 
     st.markdown("### Carte Géographique des Lieux Visités")
-    lieu_agg = df_filtered.groupby('lieu').agg(passages=('passage_id', 'count')).reset_index()
+    lieu_agg = df_filtered[df_filtered["visite"].notna()].groupby('lieu').agg(passages=('passage_id', 'count')).reset_index()
     coords_map = {
         "Rennes": (48.1147, -1.6794),
         "Nantes": (47.2184, -1.5536),
@@ -359,15 +361,11 @@ def main():
     folium_static(m)
 
     st.markdown("### KPI et Alertes")
-    total_passages = len(df_filtered)
-    avg_per_agent = df_filtered.groupby('agent')['passage_id'].count().mean()
-    if selected_visitetype:
-        df_total_by_type = df[df["visitetype"].isin(selected_visitetype)]
-    else:
-        df_total_by_type = df
-    total_lieux = df_total_by_type['lieu'].nunique()
-    visited_lieux = df_filtered['lieu'].unique()
-    missing_lieux = [lieu for lieu in df_total_by_type['lieu'].unique() if lieu not in visited_lieux]
+    total_passages = len(df_filtered[df_filtered["visite"].notna()])
+    avg_per_agent = df_filtered[df_filtered["visite"].notna()].groupby('agent')['passage_id'].count().mean() if not df_filtered[df_filtered["visite"].notna()].empty else 0
+    total_lieux = df['lieu'].nunique()  # Utiliser df pour inclure tous les lieux
+    visited_lieux = df_filtered[df_filtered["visite"].notna()]['lieu'].unique()
+    missing_lieux = [lieu for lieu in df['lieu'].unique() if lieu not in visited_lieux]
     coverage_pct = (len(visited_lieux) / total_lieux) * 100 if total_lieux > 0 else 0
     st.metric("Total Passages", total_passages)
     st.metric("Moyenne par Agent", f"{avg_per_agent:.2f}")
@@ -384,7 +382,7 @@ def main():
             missing_df[col_name] = 0
         if "date" in df.columns:
             df_counts = (
-                df.assign(weekday=df["date"].dt.day_name())
+                df[df["date"].notna()].assign(weekday=df["date"].dt.day_name())
                   .groupby(["lieu", "weekday"], dropna=False)
                   .agg(passages=("passage_id", "count"))
                   .reset_index()
