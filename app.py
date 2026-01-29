@@ -126,7 +126,7 @@ def main():
     min_date = df[df["date"].notna()]["date"].min().to_pydatetime().date() if not df["date"].isna().all() else datetime(2025, 1, 1).date()
     max_date = df[df["date"].notna()]["date"].max().to_pydatetime().date() if not df["date"].isna().all() else datetime(2025, 12, 31).date()
 
-    default_start_date = max(datetime(2026, 1, 1).date(), min_date_data)
+    default_start_date = max(datetime(2026, 1, 1).date(), min_date)
 
     start_date = st.sidebar.date_input(
         "Date de début",

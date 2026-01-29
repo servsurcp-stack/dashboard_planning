@@ -16,10 +16,13 @@ def normalize_string(s):
     return s
 
 # Lire le fichier Excel
-df = pd.read_excel("planning surete.xlsx", sheet_name="Planning", header=2, engine="openpyxl")
+df1 = pd.read_excel("./data/planning surete.xlsx", sheet_name="Planning", header=2, engine="openpyxl")
+df1.rename(columns={"Unnamed: 5" : "Eric VEAUTE 2", "Unnamed: 7":"J-C REPIQUET 2", "Unnamed: 9": "Jonathan CANU 2"},inplace=True)
 
-# Renommer les colonnes spécifiques
-df.rename(columns={"Unnamed: 5": "Eric VEAUTE 2", "Unnamed: 7": "J-C REPIQUET 2", "Unnamed: 9": "Jonathan CANU 2"}, inplace=True)
+df2 = pd.read_excel("./data/PLANNING 2026.xlsx", sheet_name="Planning", header=2, engine="openpyxl")
+df2.rename(columns={"Unnamed: 5" : "Eric VEAUTE 2", "Unnamed: 7":"J-C REPIQUET 2", "Unnamed: 9": "Jonathan CANU 2", "Unnamed: 11": "Christophe BISSON 2", "Unnamed: 13": "Line VINAY 2" },inplace=True)
+
+df = pd.concat([df1, df2])
 
 # Normaliser les colonnes textuelles dans df
 for col in df.columns:
@@ -27,7 +30,7 @@ for col in df.columns:
         df[col] = df[col].apply(normalize_string)
 
 # 1) Identifier les colonnes 'passage'
-people = ["Eric VEAUTE", "J-C REPIQUET", "Jonathan CANU"]
+people = ["Eric VEAUTE", "J-C REPIQUET", "Jonathan CANU", "Christophe BISSON", "Line VINAY"]
 cols_passage = [c for c in df.columns for p in people if c == p or c.startswith(p + " ")]
 
 if not cols_passage:
@@ -55,12 +58,10 @@ long["Agent"] = extra[0].str.strip()
 long["Agent"] = long["Agent"].apply(normalize_string)
 
 # --- Anonymiser certains agents: ERIC VEAUTE/ERIC VAUTE -> 1, J-C REPIQUET -> 2, Jonathan CANU -> 3
-# Normalisation utilisée pour faire correspondre les clés (supprime accents et ponctuation, met en MAJ)
 def _normalize_key_for_map(s):
     if pd.isna(s):
         return s
     key = unicodedata.normalize('NFKD', str(s)).encode('ASCII', 'ignore').decode('ASCII')
-    # Supprimer la ponctuation (y compris les tirets) pour matcher des variantes comme 'J-C' vs 'J C'
     key = re.sub(r"[^\w\s]", "", key)
     key = re.sub(r"\s+", " ", key).strip().upper()
     return key
@@ -71,6 +72,8 @@ ANON_MAP = {
     "J C REPIQUET": "2",
     "JC REPIQUET": "2",
     "JONATHAN CANU": "3",
+    "CHRISTOPHE BISSON": "4",
+    "LINE VINAY": "5"
 }
 
 def anonymize_agent_name(s):
@@ -93,7 +96,6 @@ long = long[order]
 if "Date" in long.columns:
     try:
         long["Date"] = pd.to_datetime(long["Date"], errors='coerce')
-        # Filtrer pour ne garder que les lignes où Date <= aujourd'hui
         today = pd.Timestamp.now().normalize()  # Date d'aujourd'hui sans heure
         long = long[long["Date"] <= today].reset_index(drop=True)
     except Exception as e:
@@ -122,11 +124,13 @@ def classify_visite(v):
         return "Agence"
     if s.startswith("AT"):
         return "Antenne"
+    if s.startswith("DSP"):
+        return "DSP"
     return "Autre"
 
 long["VisiteType"] = long["Visite"].apply(classify_visite)
 
-# --- 3) Créer 'Passage_ID' comme entier
+# --- 3) Créer 'Passage_ID' comme entier pour les visites existantes
 long.insert(0, "Passage_ID", range(1, len(long) + 1))
 
 # --- 4) Supprimer la colonne 'Passage'
@@ -135,31 +139,13 @@ if "Passage" in long.columns:
     if "Compteur" in long.columns:
         long = long.drop(columns=["Compteur"])
 
-# --- 5) Dictionnaire Code -> Nom (ville/libellé)
-LIEU_MAP = {
-    "CE01": "Rennes", "CE02": "Nantes", "CE03": "Orleans", "CE04": "Bordeaux",
-    "CE05": "Toulouse", "CE06": "Montpellier", "CE07": "Corbas", "CE08": "Marseille",
-    "CE09": "Clermont", "CE10": "Lille", "CE11": "Nice", "CE12": "Caen",
-    "CE13": "Nancy", "CE14": "Dijon", "CE15": "Tremblay", "CE16": "Lisses",
-    "CE17": "Ferrieres", "CE18": "Pantin", "CE19": "Chartres", "CE20": "Reims",
-    "CE21": "Niort", "CE24": "Strasbourg", "CE26": "Chambery", "CE27": "Rouen",
-    "CE28": "Quincieux", "CE40": "WILLEBROEK",
-    "H03": "Artenay", "H07": "Moins", "H10": "Brebieres", "H18": "Compans",
-    "SIEGE": "", "RTT": "", "CP": "", "FERIE": "", "DSP": "", "TTRAVAIL": "", "FORMATION": "",
-    "AT0301": "VICHY - COLIS PRIVE", "AT4201": "ST ETIENNE - COLIS PRIVE",
-    "AT2201": "ST BRIEUC - COLIS PRIVE", "AT2901": "BREST - COLIS PRIVE",
-    "AT5601": "VANNES - COLIS PRIVE", "AT5602": "LORIENT - COLIS PRIVE",
-    "AT1801": "BOURGES - COLIS PRIVE", "AT3601": "CHATEAUROUX - COLIS PRIVE",
-    "AT8601": "POITIERS - COLIS PRIVE", "AT8302": "FREJUS - COLIS PRIVE",
-    "AT1201": "RODEZ-COLIS PRIVE", "AT1901": "BRIVE-COLIS PRIVE",
-    "AT2601": "VALENCE -COLIS PRIVE", "AT4202": "ROANNE-COLIS PRIVE",
-    "AT4601": "CAHORS-COLIS PRIVE", "AT5701": "METZ-COLIS PRIVE",
-    "AT6001": "COMPIEGNE-COLIS PRIVE", "AT6002": "BEAUVAIS-COLIS PRIVE",
-    "AT6101": "ALENCON-COLIS PRIVE", "AT6801": "COLMAR-COLIS PRIVE",
-    "AT7401": "ANNECY-COLIS PRIVE", "AT7801": "MAUREPAS.-COLIS PRIVE",
-    "AT8001": "AMIENS-COLIS PRIVE", "AT8301": "TOULON-COLIS PRIVE",
-    "AT8401": "AVIGNON-COLIS PRIVE", "AT8901": "AUXERRE-COLIS PRIVE",
-}
+# --- 5) Créer le dictionnaire LIEU_MAP à partir de la feuille "Listes"
+df_listes = pd.read_excel("./data/PLANNING 2026.xlsx", sheet_name="Listes", header=1, engine="openpyxl")
+LIEU_MAP = dict(zip(df_listes["Code Agence"], df_listes["Nom"]))
+
+# Exclure les entrées non pertinentes
+non_lieux = ["SIEGE", "RTT", "CP", "FERIE", "TTRAVAIL", "FORMATION", "RECUP"]
+LIEU_MAP = {k: v for k, v in LIEU_MAP.items() if k not in non_lieux}
 
 # --- 6) Normaliser le code (CE/H -> 2 chiffres, upper, sans espaces)
 def normalize_code(v):
@@ -204,24 +190,56 @@ REGION_MAP = {
     "CE04": "SUD", "CE05": "SUD", "AT1201": "SUD", "AT4601": "SUD",
     "CE06": "SUD", "CE08": "SUD", "AT8301": "SUD", "AT8401": "SUD",
     "CE11": "SUD", "AT8302": "SUD",
-    "SIEGE": "Siege", "RTT": "Inconnu", "CP": "Inconnu", "FERIE": "Inconnu",
-    "DSP": "Inconnu", "TTRAVAIL": "Inconnu", "FORMATION": "Inconnu", "H10": "NORD", "H03": "OUEST", "H07": "EST", "H18": "National", "CE40": "BeLux"
+    "H10": "HUB", "H03": "HUB", "H07": "HUB", "H18": "HUB", "CE40": "BeLux",
+    "DSP": "DSP"
 }
 
 long["Region"] = codes_norm.map(REGION_MAP).fillna("Inconnu")
 
-# --- 9) Filtrer pour exclure VisiteType == 'Autre'
+# --- 9) Filtrer pour exclure VisiteType == 'Autre' et les non-lieux
+long = long[~long["Visite"].isin(non_lieux)]
 long = long[long["VisiteType"] != "Autre"]
 
-# --- 10) Mettre les colonnes dans un ordre pratique
+# --- 10) Ajouter tous les lieux de LIEU_MAP non présents dans long
+all_lieux = []
+last_passage_id = long["Passage_ID"].max() if not long.empty else 0
+current_passage_id = last_passage_id + 1
+
+
+
+for code, nom in LIEU_MAP.items():
+    print(code, nom)
+    lieu_str = f"{code} - {nom}" if nom.strip() else code
+    if lieu_str not in long["Lieu"].values:
+        # Créer une ligne pour le lieu non visité
+        new_row = {
+            "Passage_ID": current_passage_id,
+            "Visite": pd.NA,  # Pas de visite pour ce lieu
+            "VisiteType": classify_visite(code),
+            "Region": REGION_MAP.get(code, "Inconnu"),
+            "Lieu": lieu_str,
+            "Agent": "Inconnu"  # Agent inconnu pour les lieux non visités
+        }
+        # Ajouter les colonnes de id_cols (comme Date, Mois, etc.) avec des valeurs par défaut (NaN)
+        for col in id_cols:
+            new_row[col] = pd.NA
+        all_lieux.append(new_row)
+        current_passage_id += 1
+
+# Ajouter les lieux non visités au DataFrame
+if all_lieux:
+    df_all_lieux = pd.DataFrame(all_lieux)
+    long = pd.concat([long, df_all_lieux], ignore_index=True)
+
+# --- 11) Mettre les colonnes dans un ordre pratique
 front = [c for c in ["Passage_ID", "Date", "Mois", "Jour", "Semaine",
                      "Agent", "Visite", "VisiteType", "Region", "Lieu"]
          if c in long.columns]
 others = [c for c in long.columns if c not in front]
 long = long[front + others]
 
-# --- 11) Convertir les noms des colonnes en minuscules
+# --- 12) Convertir les noms des colonnes en minuscules
 long.columns = [col.lower() for col in long.columns]
 
-# --- 12) Exporter vers CSV
-long.to_csv("planning.csv", index=False)
+# --- 13) Exporter vers CSV
+long.to_csv("./data/planning.csv", index=False)
